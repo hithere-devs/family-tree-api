@@ -1,0 +1,19 @@
+import { Router } from 'express';
+import { authMiddleware } from '../middleware/auth-middleware.js';
+import * as treeController from '../controllers/tree-controller.js';
+
+const router = Router();
+
+// All tree routes require authentication
+router.use(authMiddleware);
+
+// GET /api/tree/:personId              — get subtree centered on person
+router.get('/:personId', treeController.getSubtree);
+
+// GET /api/tree/:personId/ancestors    — get recursive ancestors
+router.get('/:personId/ancestors', treeController.getAncestors);
+
+// GET /api/tree/:personId/descendants  — get recursive descendants
+router.get('/:personId/descendants', treeController.getDescendants);
+
+export default router;
