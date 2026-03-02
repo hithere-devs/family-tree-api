@@ -4,7 +4,7 @@ import {
     assertNoCycle,
     assertMaxParents,
     assertNoDuplicate,
-    assertNoExistingSpouse,
+    assertMaxSpouses,
 } from '../validators/graph-validator.js';
 
 /* ------------------------------------------------------------------ */
@@ -63,8 +63,8 @@ export async function addRelationship(data: {
         await assertNoCycle(targetPersonId, sourcePersonId);
         await assertMaxParents(sourcePersonId);
     } else if (relationshipType === 'SPOUSE') {
-        await assertNoExistingSpouse(sourcePersonId);
-        await assertNoExistingSpouse(targetPersonId);
+        await assertMaxSpouses(sourcePersonId);
+        await assertMaxSpouses(targetPersonId);
     }
 
     // Duplicate check for both directions

@@ -87,21 +87,24 @@ export async function assertNoDuplicate(
 }
 
 /**
- * For spouse relationships: ensures neither person already has a spouse.
+ * Ensures a person does not exceed the maximum number of spouses (default 2).
  */
-export async function assertNoExistingSpouse(personId: string): Promise<void> {
-    const row = await queryOne(
+export async function assertMaxSpouses(
+    personId: string,
+    max: number = 2,
+): Promise<void> {
+    const rows = await queryAll<RelationshipRow>(
         `SELECT id FROM relationship
      WHERE source_person_id = :personId
        AND relationship_type = 'SPOUSE'`,
         { personId },
     );
 
-    if (row) {
+    if (rows.length >= max) {
         throw new AppError(
-            'Person already has a spouse',
+            `Person already has ${max} spouse(s). Cannot add more.`,
             400,
-            'ERR_EXISTING_SPOUSE',
+            'ERR_MAX_SPOUSES',
         );
     }
 }

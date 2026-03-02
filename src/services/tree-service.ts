@@ -12,7 +12,7 @@ import {
 
 function personToTree(row: PersonRow, rels: RelationshipRow[]): TreePerson {
     const parentIds: string[] = [];
-    let spouseId: string | null = null;
+    const spouseIds: string[] = [];
     const childrenIds: string[] = [];
 
     for (const r of rels) {
@@ -22,7 +22,7 @@ function personToTree(row: PersonRow, rels: RelationshipRow[]): TreePerson {
                 parentIds.push(r.target_person_id);
                 break;
             case 'SPOUSE':
-                spouseId = r.target_person_id;
+                spouseIds.push(r.target_person_id);
                 break;
             case 'PARENT':
                 childrenIds.push(r.target_person_id);
@@ -41,7 +41,7 @@ function personToTree(row: PersonRow, rels: RelationshipRow[]): TreePerson {
         createdAt: row.created_at,
         updatedAt: row.updated_at,
         parentIds,
-        spouseId,
+        spouseIds,
         childrenIds,
     };
 }

@@ -67,7 +67,7 @@ export interface PersonResponse {
 
 export interface TreePerson extends PersonResponse {
     parentIds: string[];
-    spouseId: string | null;
+    spouseIds: string[];
     childrenIds: string[];
 }
 
