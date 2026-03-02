@@ -40,6 +40,7 @@ export interface UserRow {
     username: string;
     password_hash: string;
     role: UserRole;
+    must_change_password: boolean;
     person_id: string;
     created_at: string;
     updated_at: string;
@@ -74,6 +75,7 @@ export interface UserResponse {
     id: string;
     username: string;
     role: UserRole;
+    mustChangePassword: boolean;
     personId: string;
 }
 

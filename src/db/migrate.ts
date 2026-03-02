@@ -1,61 +1,47 @@
+/**
+ * Migration runner — reads numbered .up.sql / .down.sql files
+ * from the migrations/ folder and executes them in order.
+ *
+ * Usage:
+ *   npm run migrate            # run all UP migrations
+ *   npm run migrate -- --fresh  # run all DOWN then UP (destructive!)
+ *   npm run migrate -- --down   # run all DOWN migrations only
+ */
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { getDb, execute } from './connection.js';
 
-const UP = `
-  -- Person table (central node of the family graph)
-  CREATE TABLE IF NOT EXISTS person (
-    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    first_name    VARCHAR(255) NOT NULL,
-    last_name     VARCHAR(255) DEFAULT '',
-    gender        VARCHAR(10) CHECK (gender IN ('male', 'female', 'other')) DEFAULT 'other',
-    is_deceased   BOOLEAN DEFAULT false,
-    birth_date    VARCHAR(50),
-    bio           TEXT,
-    location      VARCHAR(255),
-    is_deleted    BOOLEAN DEFAULT false,
-    created_by    VARCHAR(255),
-    updated_by    VARCHAR(255),
-    created_at    TIMESTAMPTZ DEFAULT NOW(),
-    updated_at    TIMESTAMPTZ DEFAULT NOW()
-  );
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const MIGRATIONS_DIR = path.join(__dirname, 'migrations');
 
-  -- Relationship table (directed edges of the family graph)
-  CREATE TABLE IF NOT EXISTS relationship (
-    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    source_person_id    UUID NOT NULL REFERENCES person(id) ON DELETE CASCADE,
-    target_person_id    UUID NOT NULL REFERENCES person(id) ON DELETE CASCADE,
-    relationship_type   VARCHAR(10) NOT NULL CHECK (relationship_type IN ('PARENT', 'CHILD', 'SPOUSE')),
-    status              VARCHAR(20) DEFAULT 'confirmed' CHECK (status IN ('confirmed', 'pending')),
-    created_by          VARCHAR(255),
-    created_at          TIMESTAMPTZ DEFAULT NOW(),
-    updated_at          TIMESTAMPTZ DEFAULT NOW(),
-    CONSTRAINT no_self_relationship CHECK (source_person_id != target_person_id),
-    CONSTRAINT unique_relationship UNIQUE (source_person_id, target_person_id, relationship_type)
-  );
+function getMigrationFiles(direction: 'up' | 'down'): string[] {
+    const files = fs
+        .readdirSync(MIGRATIONS_DIR)
+        .filter((f) => f.endsWith(`.${direction}.sql`))
+        .sort();
 
-  -- User table (authentication layer, links to a person)
-  CREATE TABLE IF NOT EXISTS app_user (
-    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    username      VARCHAR(255) UNIQUE NOT NULL,
-    password_hash VARCHAR(255) NOT NULL,
-    role          VARCHAR(10) NOT NULL CHECK (role IN ('admin', 'member')) DEFAULT 'member',
-    person_id     UUID UNIQUE NOT NULL REFERENCES person(id) ON DELETE CASCADE,
-    created_at    TIMESTAMPTZ DEFAULT NOW(),
-    updated_at    TIMESTAMPTZ DEFAULT NOW()
-  );
+    // down migrations run in reverse order
+    if (direction === 'down') files.reverse();
 
-  -- Indexes for fast lookups
-  CREATE INDEX IF NOT EXISTS idx_relationship_source   ON relationship(source_person_id);
-  CREATE INDEX IF NOT EXISTS idx_relationship_target   ON relationship(target_person_id);
-  CREATE INDEX IF NOT EXISTS idx_relationship_type     ON relationship(relationship_type);
-  CREATE INDEX IF NOT EXISTS idx_user_person           ON app_user(person_id);
-  CREATE INDEX IF NOT EXISTS idx_person_active         ON person(is_deleted) WHERE is_deleted = false;
-`;
+    return files;
+}
 
-const DOWN = `
-  DROP TABLE IF EXISTS app_user    CASCADE;
-  DROP TABLE IF EXISTS relationship CASCADE;
-  DROP TABLE IF EXISTS person       CASCADE;
-`;
+async function runMigrations(direction: 'up' | 'down') {
+    const files = getMigrationFiles(direction);
+
+    if (files.length === 0) {
+        console.log(`ℹ️   No ${direction} migration files found.`);
+        return;
+    }
+
+    for (const file of files) {
+        const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, file), 'utf-8');
+        console.log(`  ▶ ${file}`);
+        await execute(sql);
+    }
+}
 
 async function migrate() {
     let db;
@@ -64,14 +50,22 @@ async function migrate() {
         await db.authenticate();
         console.log('✅  Connected to database');
 
-        // Check for --fresh flag to drop & recreate
-        if (process.argv.includes('--fresh')) {
-            console.log('🗑️   Dropping existing tables (--fresh)...');
-            await execute(DOWN);
+        const isFresh = process.argv.includes('--fresh');
+        const isDown = process.argv.includes('--down');
+
+        if (isFresh) {
+            console.log('🗑️   Running DOWN migrations (--fresh)…');
+            await runMigrations('down');
+            console.log('🔨  Running UP migrations…');
+            await runMigrations('up');
+        } else if (isDown) {
+            console.log('🗑️   Running DOWN migrations…');
+            await runMigrations('down');
+        } else {
+            console.log('🔨  Running UP migrations…');
+            await runMigrations('up');
         }
 
-        console.log('🔨  Running migration...');
-        await execute(UP);
         console.log('✅  Migration complete');
     } catch (err) {
         console.error('❌  Migration failed:', err);

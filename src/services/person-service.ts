@@ -80,8 +80,8 @@ export async function createPerson(data: {
         const passwordHash = await bcrypt.hash(defaultPassword, 12);
 
         await execute(
-            `INSERT INTO app_user (username, password_hash, role, person_id)
-             VALUES (:username, :passwordHash, 'member', :personId)`,
+            `INSERT INTO app_user (username, password_hash, role, must_change_password, person_id)
+             VALUES (:username, :passwordHash, 'member', true, :personId)`,
             { username, passwordHash, personId: row.id },
         );
 

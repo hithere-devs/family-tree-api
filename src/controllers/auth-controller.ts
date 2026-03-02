@@ -48,3 +48,28 @@ export function logout(
     // This endpoint exists for API completeness.
     res.json({ message: 'Logged out successfully' });
 }
+
+export async function changePassword(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction,
+): Promise<void> {
+    try {
+        if (!req.user) {
+            res.status(401).json({ error: 'Not authenticated' });
+            return;
+        }
+
+        const { currentPassword, newPassword } = req.body;
+
+        if (!currentPassword || !newPassword) {
+            res.status(400).json({ error: 'Current password and new password are required' });
+            return;
+        }
+
+        await authService.changePassword(req.user.userId, currentPassword, newPassword);
+        res.json({ message: 'Password changed successfully' });
+    } catch (err) {
+        next(err);
+    }
+}

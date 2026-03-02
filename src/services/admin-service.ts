@@ -46,8 +46,8 @@ export async function createUser(data: {
     const passwordHash = await bcrypt.hash(data.password, 12);
 
     const row = await queryOne<UserRow>(
-        `INSERT INTO app_user (username, password_hash, role, person_id)
-     VALUES (:username, :passwordHash, :role, :personId)
+        `INSERT INTO app_user (username, password_hash, role, must_change_password, person_id)
+     VALUES (:username, :passwordHash, :role, true, :personId)
      RETURNING *`,
         {
             username: data.username,
@@ -63,6 +63,7 @@ export async function createUser(data: {
         id: row.id,
         username: row.username,
         role: row.role,
+        mustChangePassword: row.must_change_password,
         personId: row.person_id,
     };
 }
@@ -88,6 +89,7 @@ export async function listUsers(): Promise<
         id: r.id,
         username: r.username,
         role: r.role,
+        mustChangePassword: r.must_change_password,
         personId: r.person_id,
         personFirstName: r.person_first_name,
         personLastName: r.person_last_name,
