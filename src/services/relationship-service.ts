@@ -1,5 +1,5 @@
 import { getDb, queryAll, queryOne, execute } from '../db/connection.js';
-import { AppError, type RelationshipRow, type RelationshipType } from '../types/index.js';
+import { AppError, type RelationshipRow, type RelationshipStatus, type RelationshipType } from '../types/index.js';
 import {
     assertNoCycle,
     assertMaxParents,
@@ -177,9 +177,38 @@ export async function getRelationshipsForPerson(
     personId: string,
 ): Promise<RelationshipRow[]> {
     return queryAll<RelationshipRow>(
-        `SELECT * FROM relationship
-     WHERE source_person_id = :personId
-     ORDER BY relationship_type, created_at`,
+        `SELECT r.* FROM relationship r
+     INNER JOIN person p ON p.id = r.target_person_id AND p.is_deleted = false
+     WHERE r.source_person_id = :personId
+     ORDER BY r.relationship_type, r.created_at`,
         { personId },
+    );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Update relationship status (e.g. mark as divorced)                 */
+/* ------------------------------------------------------------------ */
+
+export async function updateRelationshipStatus(
+    sourcePersonId: string,
+    targetPersonId: string,
+    status: RelationshipStatus,
+): Promise<void> {
+    // Update both directions
+    await execute(
+        `UPDATE relationship
+         SET status = :status, updated_at = NOW()
+         WHERE source_person_id = :source
+           AND target_person_id = :target
+           AND relationship_type = 'SPOUSE'`,
+        { status, source: sourcePersonId, target: targetPersonId },
+    );
+    await execute(
+        `UPDATE relationship
+         SET status = :status, updated_at = NOW()
+         WHERE source_person_id = :target
+           AND target_person_id = :source
+           AND relationship_type = 'SPOUSE'`,
+        { status, source: sourcePersonId, target: targetPersonId },
     );
 }

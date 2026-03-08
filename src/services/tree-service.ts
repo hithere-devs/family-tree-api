@@ -13,6 +13,7 @@ import {
 function personToTree(row: PersonRow, rels: RelationshipRow[]): TreePerson {
     const parentIds: string[] = [];
     const spouseIds: string[] = [];
+    const exSpouseIds: string[] = [];
     const childrenIds: string[] = [];
 
     for (const r of rels) {
@@ -22,7 +23,11 @@ function personToTree(row: PersonRow, rels: RelationshipRow[]): TreePerson {
                 parentIds.push(r.target_person_id);
                 break;
             case 'SPOUSE':
-                spouseIds.push(r.target_person_id);
+                if (r.status === 'divorced') {
+                    exSpouseIds.push(r.target_person_id);
+                } else {
+                    spouseIds.push(r.target_person_id);
+                }
                 break;
             case 'PARENT':
                 childrenIds.push(r.target_person_id);
@@ -36,12 +41,20 @@ function personToTree(row: PersonRow, rels: RelationshipRow[]): TreePerson {
         lastName: row.last_name,
         gender: row.gender,
         isDeceased: row.is_deceased,
+        birthDate: row.birth_date,
+        deathYear: row.death_year,
+        bio: row.bio,
+        phoneNumber: row.phone_number,
+        socialLinks: row.social_links,
+        phoneVerified: row.phone_verified,
+        location: row.location,
         createdBy: row.created_by,
         updatedBy: row.updated_by,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
         parentIds,
         spouseIds,
+        exSpouseIds,
         childrenIds,
     };
 }
@@ -88,11 +101,12 @@ export async function getSubtree(
 
     if (connectedPeople.length === 0) return {};
 
-    // 3. Fetch ALL relationships for these people
+    // 3. Fetch ALL relationships for these people (exclude deleted targets)
     const idArray = connectedPeople.map((p) => p.id);
     const allRels = await queryAll<RelationshipRow>(
-        `SELECT * FROM relationship
-         WHERE source_person_id = ANY(ARRAY[${idArray.map((_, i) => `:id${i}`).join(',')}]::uuid[])`,
+        `SELECT r.* FROM relationship r
+         INNER JOIN person p ON p.id = r.target_person_id AND p.is_deleted = false
+         WHERE r.source_person_id = ANY(ARRAY[${idArray.map((_, i) => `:id${i}`).join(',')}]::uuid[])`,
         Object.fromEntries(idArray.map((id, i) => [`id${i}`, id])),
     );
 
@@ -135,13 +149,14 @@ export async function getAncestors(personId: string): Promise<TreePerson[]> {
         { personId },
     );
 
-    // Fetch relationships for each ancestor
+    // Fetch relationships for each ancestor (exclude deleted targets)
     if (rows.length === 0) return [];
 
     const ids = rows.map((r) => r.id);
     const rels = await queryAll<RelationshipRow>(
-        `SELECT * FROM relationship
-     WHERE source_person_id = ANY(ARRAY[${ids.map((_, i) => `:id${i}`).join(',')}]::uuid[])`,
+        `SELECT r.* FROM relationship r
+     INNER JOIN person p ON p.id = r.target_person_id AND p.is_deleted = false
+     WHERE r.source_person_id = ANY(ARRAY[${ids.map((_, i) => `:id${i}`).join(',')}]::uuid[])`,
         Object.fromEntries(ids.map((id, i) => [`id${i}`, id])),
     );
 
@@ -181,8 +196,9 @@ export async function getDescendants(personId: string): Promise<TreePerson[]> {
 
     const ids = rows.map((r) => r.id);
     const rels = await queryAll<RelationshipRow>(
-        `SELECT * FROM relationship
-     WHERE source_person_id = ANY(ARRAY[${ids.map((_, i) => `:id${i}`).join(',')}]::uuid[])`,
+        `SELECT r.* FROM relationship r
+     INNER JOIN person p ON p.id = r.target_person_id AND p.is_deleted = false
+     WHERE r.source_person_id = ANY(ARRAY[${ids.map((_, i) => `:id${i}`).join(',')}]::uuid[])`,
         Object.fromEntries(ids.map((id, i) => [`id${i}`, id])),
     );
 

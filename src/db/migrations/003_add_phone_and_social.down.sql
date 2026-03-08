@@ -1,0 +1,2 @@
+ALTER TABLE person DROP COLUMN IF EXISTS phone_number;
+ALTER TABLE person DROP COLUMN IF EXISTS social_links;

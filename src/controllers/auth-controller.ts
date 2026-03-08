@@ -1,4 +1,4 @@
-import type { Request, Response, NextFunction } from 'express';
+import type { NextFunction, Request, Response } from 'express';
 import * as authService from '../services/auth-service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
@@ -69,6 +69,80 @@ export async function changePassword(
 
         await authService.changePassword(req.user.userId, currentPassword, newPassword);
         res.json({ message: 'Password changed successfully' });
+    } catch (err) {
+        next(err);
+    }
+}
+
+export async function requestPhoneOtp(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction,
+): Promise<void> {
+    try {
+        if (!req.user) {
+            res.status(401).json({ error: 'Not authenticated' });
+            return;
+        }
+
+        const { phoneNumber } = req.body;
+        const result = await authService.requestPhoneVerificationOtp(
+            req.user.userId,
+            phoneNumber,
+        );
+        res.json(result);
+    } catch (err) {
+        next(err);
+    }
+}
+
+export async function verifyPhoneOtp(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction,
+): Promise<void> {
+    try {
+        if (!req.user) {
+            res.status(401).json({ error: 'Not authenticated' });
+            return;
+        }
+
+        const { otp } = req.body;
+        const user = await authService.verifyPhoneOtp(req.user.userId, otp);
+        res.json({ message: 'Phone verified successfully', user });
+    } catch (err) {
+        next(err);
+    }
+}
+
+export async function requestForgotPasswordOtp(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+): Promise<void> {
+    try {
+        const { username, phoneNumber } = req.body;
+        const result = await authService.requestPasswordResetOtp(username, phoneNumber);
+        res.json(result);
+    } catch (err) {
+        next(err);
+    }
+}
+
+export async function resetPasswordWithOtp(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+): Promise<void> {
+    try {
+        const { username, phoneNumber, otp, newPassword } = req.body;
+        await authService.resetPasswordWithOtp(
+            username,
+            phoneNumber,
+            otp,
+            newPassword,
+        );
+        res.json({ message: 'Password reset successfully' });
     } catch (err) {
         next(err);
     }

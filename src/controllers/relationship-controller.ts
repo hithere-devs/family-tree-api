@@ -78,3 +78,42 @@ export async function getForPerson(
         next(err);
     }
 }
+
+/* ------------------------------------------------------------------ */
+/*  Update relationship status (e.g. divorce)                          */
+/* ------------------------------------------------------------------ */
+
+export async function updateStatus(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction,
+): Promise<void> {
+    try {
+        const { sourcePersonId, targetPersonId, status } = req.body;
+
+        if (!sourcePersonId || !targetPersonId || !status) {
+            res.status(400).json({
+                error: 'sourcePersonId, targetPersonId, and status are required',
+            });
+            return;
+        }
+
+        const validStatuses = ['confirmed', 'pending', 'divorced'];
+        if (!validStatuses.includes(status)) {
+            res.status(400).json({
+                error: `status must be one of: ${validStatuses.join(', ')}`,
+            });
+            return;
+        }
+
+        await relationshipService.updateRelationshipStatus(
+            sourcePersonId,
+            targetPersonId,
+            status,
+        );
+
+        res.json({ message: 'Relationship status updated' });
+    } catch (err) {
+        next(err);
+    }
+}

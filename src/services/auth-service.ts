@@ -1,27 +1,107 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { queryOne, execute } from '../db/connection.js';
-import { AppError, type UserRow, type AuthPayload, type UserResponse } from '../types/index.js';
+import { execute, queryOne } from '../db/connection.js';
+import {
+    AppError,
+    type AuthPayload,
+    type OtpPurpose,
+    type OtpRequestRow,
+    type UserResponse,
+    type UserRow,
+} from '../types/index.js';
 
 const JWT_SECRET = process.env.JWT_SECRET ?? 'fallback-secret';
 const TOKEN_EXPIRY = '7d';
+const OTP_EXPIRY_MINUTES = 10;
 
-/* ------------------------------------------------------------------ */
-/*  Login                                                              */
-/* ------------------------------------------------------------------ */
+function toUserResponse(row: UserRow): UserResponse {
+    return {
+        id: row.id,
+        username: row.username,
+        role: row.role,
+        mustChangePassword: row.must_change_password,
+        personId: row.person_id,
+        phoneNumber: row.phone_number ?? null,
+        phoneVerified: row.phone_verified ?? false,
+    };
+}
 
-export async function login(
-    username: string,
-    password: string,
-): Promise<{ token: string; user: UserResponse }> {
+async function getUserWithPersonByUserId(userId: string): Promise<UserRow> {
     const row = await queryOne<UserRow>(
-        `SELECT * FROM app_user WHERE username = :username`,
+        `SELECT u.*, p.phone_number, p.phone_verified
+         FROM app_user u
+         INNER JOIN person p ON p.id = u.person_id
+         WHERE u.id = :userId`,
+        { userId },
+    );
+
+    if (!row) {
+        throw new AppError('User not found', 404, 'ERR_NOT_FOUND');
+    }
+
+    return row;
+}
+
+async function getUserWithPersonByUsername(username: string): Promise<UserRow> {
+    const row = await queryOne<UserRow>(
+        `SELECT u.*, p.phone_number, p.phone_verified
+         FROM app_user u
+         INNER JOIN person p ON p.id = u.person_id
+         WHERE u.username = :username`,
         { username },
     );
 
     if (!row) {
         throw new AppError('Invalid username or password', 401, 'ERR_AUTH');
     }
+
+    return row;
+}
+
+function generateOtp(): string {
+    return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+async function createOtpRequest(
+    userId: string,
+    phoneNumber: string,
+    purpose: OtpPurpose,
+): Promise<void> {
+    await execute(
+        `INSERT INTO otp_request (user_id, phone_number, purpose, otp_code, expires_at)
+         VALUES (:userId, :phoneNumber, :purpose, :otpCode, NOW() + INTERVAL '${OTP_EXPIRY_MINUTES} minutes')`,
+        { userId, phoneNumber, purpose, otpCode: generateOtp() },
+    );
+}
+
+async function getLatestOtpRequest(
+    userId: string,
+    purpose: OtpPurpose,
+): Promise<OtpRequestRow> {
+    const row = await queryOne<OtpRequestRow>(
+        `SELECT *
+         FROM otp_request
+         WHERE user_id = :userId
+           AND purpose = :purpose
+           AND verified_at IS NULL
+           AND expires_at > NOW()
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        { userId, purpose },
+    );
+
+    if (!row) {
+        throw new AppError('Please request a new OTP first', 400, 'ERR_OTP_REQUIRED');
+    }
+
+    return row;
+}
+
+export async function login(
+    username: string,
+    password: string,
+): Promise<{ token: string; user: UserResponse }> {
+    const row = await getUserWithPersonByUsername(username);
 
     const valid = await bcrypt.compare(password, row.password_hash);
     if (!valid) {
@@ -38,66 +118,40 @@ export async function login(
 
     return {
         token,
-        user: {
-            id: row.id,
-            username: row.username,
-            role: row.role,
-            mustChangePassword: row.must_change_password,
-            personId: row.person_id,
-        },
+        user: toUserResponse(row),
     };
 }
 
-/* ------------------------------------------------------------------ */
-/*  Get current authenticated user                                     */
-/* ------------------------------------------------------------------ */
-
-export async function getCurrentUser(
-    userId: string,
-): Promise<UserResponse> {
-    const row = await queryOne<UserRow>(
-        `SELECT * FROM app_user WHERE id = :userId`,
-        { userId },
-    );
-
-    if (!row) {
-        throw new AppError('User not found', 404, 'ERR_NOT_FOUND');
-    }
-
-    return {
-        id: row.id,
-        username: row.username,
-        role: row.role,
-        mustChangePassword: row.must_change_password,
-        personId: row.person_id,
-    };
+export async function getCurrentUser(userId: string): Promise<UserResponse> {
+    return toUserResponse(await getUserWithPersonByUserId(userId));
 }
-
-/* ------------------------------------------------------------------ */
-/*  Change password                                                    */
-/* ------------------------------------------------------------------ */
 
 export async function changePassword(
     userId: string,
     currentPassword: string,
     newPassword: string,
 ): Promise<void> {
-    const row = await queryOne<UserRow>(
-        `SELECT * FROM app_user WHERE id = :userId`,
-        { userId },
-    );
-
-    if (!row) {
-        throw new AppError('User not found', 404, 'ERR_NOT_FOUND');
-    }
+    const row = await getUserWithPersonByUserId(userId);
 
     const valid = await bcrypt.compare(currentPassword, row.password_hash);
     if (!valid) {
         throw new AppError('Current password is incorrect', 400, 'ERR_BAD_PASSWORD');
     }
 
+    if (row.must_change_password && !row.phone_verified) {
+        throw new AppError(
+            'Verify your phone number with OTP before changing the default password',
+            400,
+            'ERR_PHONE_NOT_VERIFIED',
+        );
+    }
+
     if (newPassword.length < 6) {
-        throw new AppError('New password must be at least 6 characters', 400, 'ERR_VALIDATION');
+        throw new AppError(
+            'New password must be at least 6 characters',
+            400,
+            'ERR_VALIDATION',
+        );
     }
 
     const newHash = await bcrypt.hash(newPassword, 12);
@@ -109,5 +163,127 @@ export async function changePassword(
              updated_at = NOW()
          WHERE id = :userId`,
         { newHash, userId },
+    );
+}
+
+export async function requestPhoneVerificationOtp(
+    userId: string,
+    phoneNumber: string,
+): Promise<{ message: string; phoneNumber: string }> {
+    if (!phoneNumber?.trim()) {
+        throw new AppError('Phone number is required', 400, 'ERR_VALIDATION');
+    }
+
+    const user = await getUserWithPersonByUserId(userId);
+
+    await execute(
+        `UPDATE person
+         SET phone_number = :phoneNumber,
+             phone_verified = false,
+             phone_verified_at = NULL,
+             updated_at = NOW()
+         WHERE id = :personId`,
+        { phoneNumber, personId: user.person_id },
+    );
+
+    await createOtpRequest(user.id, phoneNumber, 'verify-phone');
+
+    return { message: 'OTP sent successfully', phoneNumber };
+}
+
+export async function verifyPhoneOtp(
+    userId: string,
+    otp: string,
+): Promise<UserResponse> {
+    if (!otp?.trim()) {
+        throw new AppError('OTP is required', 400, 'ERR_VALIDATION');
+    }
+
+    const request = await getLatestOtpRequest(userId, 'verify-phone');
+
+    await execute(
+        `UPDATE otp_request
+         SET verified_at = NOW(), updated_at = NOW()
+         WHERE id = :id`,
+        { id: request.id },
+    );
+
+    const user = await getUserWithPersonByUserId(userId);
+    await execute(
+        `UPDATE person
+         SET phone_verified = true,
+             phone_verified_at = NOW(),
+             updated_at = NOW()
+         WHERE id = :personId`,
+        { personId: user.person_id },
+    );
+
+    return toUserResponse(await getUserWithPersonByUserId(userId));
+}
+
+export async function requestPasswordResetOtp(
+    username: string,
+    phoneNumber: string,
+): Promise<{ message: string }> {
+    if (!username?.trim() || !phoneNumber?.trim()) {
+        throw new AppError('Username and phone number are required', 400, 'ERR_VALIDATION');
+    }
+
+    const user = await getUserWithPersonByUsername(username);
+    if (user.phone_number !== phoneNumber) {
+        throw new AppError('Username and phone number do not match', 400, 'ERR_VALIDATION');
+    }
+
+    await createOtpRequest(user.id, phoneNumber, 'reset-password');
+    return { message: 'OTP sent successfully' };
+}
+
+export async function resetPasswordWithOtp(
+    username: string,
+    phoneNumber: string,
+    otp: string,
+    newPassword: string,
+): Promise<void> {
+    if (!username?.trim() || !phoneNumber?.trim() || !otp?.trim()) {
+        throw new AppError(
+            'Username, phone number and OTP are required',
+            400,
+            'ERR_VALIDATION',
+        );
+    }
+
+    if (newPassword.length < 6) {
+        throw new AppError(
+            'New password must be at least 6 characters',
+            400,
+            'ERR_VALIDATION',
+        );
+    }
+
+    const user = await getUserWithPersonByUsername(username);
+    if (user.phone_number !== phoneNumber) {
+        throw new AppError('Username and phone number do not match', 400, 'ERR_VALIDATION');
+    }
+
+    const request = await getLatestOtpRequest(user.id, 'reset-password');
+    if (request.phone_number !== phoneNumber) {
+        throw new AppError('OTP request does not match the phone number', 400, 'ERR_VALIDATION');
+    }
+
+    await execute(
+        `UPDATE otp_request
+         SET verified_at = NOW(), updated_at = NOW()
+         WHERE id = :id`,
+        { id: request.id },
+    );
+
+    const newHash = await bcrypt.hash(newPassword, 12);
+    await execute(
+        `UPDATE app_user
+         SET password_hash = :newHash,
+             must_change_password = false,
+             updated_at = NOW()
+         WHERE id = :userId`,
+        { newHash, userId: user.id },
     );
 }

@@ -14,14 +14,16 @@ export async function assertNoCycle(
     // If child is an ancestor of the new parent → cycle
     const row = await queryOne<{ found: number }>(
         `WITH RECURSIVE ancestors AS (
-       SELECT source_person_id AS ancestor_id
-       FROM relationship
-       WHERE target_person_id = :startId
-         AND relationship_type = 'PARENT'
+       SELECT r.source_person_id AS ancestor_id
+       FROM relationship r
+       INNER JOIN person p ON p.id = r.source_person_id AND p.is_deleted = false
+       WHERE r.target_person_id = :startId
+         AND r.relationship_type = 'PARENT'
        UNION
        SELECT r.source_person_id
        FROM relationship r
        INNER JOIN ancestors a ON r.target_person_id = a.ancestor_id
+       INNER JOIN person p ON p.id = r.source_person_id AND p.is_deleted = false
        WHERE r.relationship_type = 'PARENT'
      )
      SELECT 1 AS found FROM ancestors WHERE ancestor_id = :checkId
@@ -46,9 +48,10 @@ export async function assertMaxParents(
     max: number = 2,
 ): Promise<void> {
     const rows = await queryAll<RelationshipRow>(
-        `SELECT id FROM relationship
-     WHERE target_person_id = :childId
-       AND relationship_type = 'PARENT'`,
+        `SELECT r.id FROM relationship r
+     INNER JOIN person p ON p.id = r.source_person_id AND p.is_deleted = false
+     WHERE r.target_person_id = :childId
+       AND r.relationship_type = 'PARENT'`,
         { childId },
     );
 
@@ -70,10 +73,12 @@ export async function assertNoDuplicate(
     type: string,
 ): Promise<void> {
     const row = await queryOne(
-        `SELECT id FROM relationship
-     WHERE source_person_id = :sourceId
-       AND target_person_id = :targetId
-       AND relationship_type = :type`,
+        `SELECT r.id FROM relationship r
+     INNER JOIN person sp ON sp.id = r.source_person_id AND sp.is_deleted = false
+     INNER JOIN person tp ON tp.id = r.target_person_id AND tp.is_deleted = false
+     WHERE r.source_person_id = :sourceId
+       AND r.target_person_id = :targetId
+       AND r.relationship_type = :type`,
         { sourceId, targetId, type },
     );
 
@@ -94,9 +99,11 @@ export async function assertMaxSpouses(
     max: number = 2,
 ): Promise<void> {
     const rows = await queryAll<RelationshipRow>(
-        `SELECT id FROM relationship
-     WHERE source_person_id = :personId
-       AND relationship_type = 'SPOUSE'`,
+        `SELECT r.id FROM relationship r
+     INNER JOIN person p ON p.id = r.target_person_id AND p.is_deleted = false
+     WHERE r.source_person_id = :personId
+       AND r.relationship_type = 'SPOUSE'
+       AND r.status != 'divorced'`,
         { personId },
     );
 

@@ -1,11 +1,7 @@
-import type { Response, NextFunction } from 'express';
+import type { NextFunction, Response } from 'express';
+import * as personService from '../services/person-service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { assertCanEdit } from '../validators/permission-validator.js';
-import * as personService from '../services/person-service.js';
-
-/* ------------------------------------------------------------------ */
-/*  Create person (admin only — enforced at route level)               */
-/* ------------------------------------------------------------------ */
 
 export async function create(
     req: AuthenticatedRequest,
@@ -13,7 +9,18 @@ export async function create(
     next: NextFunction,
 ): Promise<void> {
     try {
-        const { firstName, lastName, gender, isDeceased, birthDate, bio, location } = req.body;
+        const {
+            firstName,
+            lastName,
+            gender,
+            isDeceased,
+            birthDate,
+            deathYear,
+            bio,
+            phoneNumber,
+            socialLinks,
+            location,
+        } = req.body;
 
         if (!firstName) {
             res.status(400).json({ error: 'firstName is required' });
@@ -26,7 +33,10 @@ export async function create(
             gender,
             isDeceased,
             birthDate,
+            deathYear,
             bio,
+            phoneNumber,
+            socialLinks,
             location,
             createdBy: req.user!.userId,
         });

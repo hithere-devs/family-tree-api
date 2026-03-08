@@ -11,7 +11,12 @@ export interface PersonRow {
     gender: 'male' | 'female' | 'other';
     is_deceased: boolean;
     birth_date: string | null;
+    death_year: number | null;
     bio: string | null;
+    phone_number: string | null;
+    social_links: { type: string; url: string; handle: string }[] | null;
+    phone_verified: boolean;
+    phone_verified_at: string | null;
     location: string | null;
     is_deleted: boolean;
     created_by: string | null;
@@ -22,12 +27,14 @@ export interface PersonRow {
 
 export type RelationshipType = 'PARENT' | 'CHILD' | 'SPOUSE';
 
+export type RelationshipStatus = 'confirmed' | 'pending' | 'divorced';
+
 export interface RelationshipRow {
     id: string;
     source_person_id: string;
     target_person_id: string;
     relationship_type: RelationshipType;
-    status: 'confirmed' | 'pending';
+    status: RelationshipStatus;
     created_by: string | null;
     created_at: string;
     updated_at: string;
@@ -42,6 +49,22 @@ export interface UserRow {
     role: UserRole;
     must_change_password: boolean;
     person_id: string;
+    phone_number?: string | null;
+    phone_verified?: boolean;
+    created_at: string;
+    updated_at: string;
+}
+
+export type OtpPurpose = 'verify-phone' | 'reset-password';
+
+export interface OtpRequestRow {
+    id: string;
+    user_id: string;
+    phone_number: string;
+    purpose: OtpPurpose;
+    otp_code: string;
+    expires_at: string;
+    verified_at: string | null;
     created_at: string;
     updated_at: string;
 }
@@ -57,7 +80,11 @@ export interface PersonResponse {
     gender: string;
     isDeceased: boolean;
     birthDate?: string | null;
+    deathYear?: number | null;
     bio?: string | null;
+    phoneNumber?: string | null;
+    socialLinks?: { type: string; url: string; handle: string }[] | null;
+    phoneVerified?: boolean;
     location?: string | null;
     createdBy: string | null;
     updatedBy: string | null;
@@ -68,6 +95,7 @@ export interface PersonResponse {
 export interface TreePerson extends PersonResponse {
     parentIds: string[];
     spouseIds: string[];
+    exSpouseIds: string[];
     childrenIds: string[];
 }
 
@@ -77,6 +105,8 @@ export interface UserResponse {
     role: UserRole;
     mustChangePassword: boolean;
     personId: string;
+    phoneNumber?: string | null;
+    phoneVerified?: boolean;
 }
 
 /* ------------------------------------------------------------------ */

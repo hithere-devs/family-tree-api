@@ -10,6 +10,9 @@ router.use(authMiddleware);
 // POST   /api/relationships              — add a relationship
 router.post('/', relationshipController.add);
 
+// PATCH  /api/relationships/status       — update relationship status (e.g. divorce)
+router.patch('/status', relationshipController.updateStatus);
+
 // GET    /api/relationships/person/:personId  — get all relationships for a person
 router.get('/person/:personId', relationshipController.getForPerson);
 
