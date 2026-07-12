@@ -106,6 +106,9 @@ export interface TreePersonLayout {
     lastName: string;
     gender: string;
     isDeceased: boolean;
+    birthDate: string | null;
+    deathYear: number | null;
+    location: string | null;
     parentIds: string[];
     spouseIds: string[];
     exSpouseIds: string[];

@@ -4,6 +4,7 @@ import personRoutes from './person-routes.js';
 import relationshipRoutes from './relationship-routes.js';
 import treeRoutes from './tree-routes.js';
 import adminRoutes from './admin-routes.js';
+import aiRoutes from './ai-routes.js';
 
 const router = Router();
 
@@ -12,5 +13,6 @@ router.use('/persons', personRoutes);
 router.use('/relationships', relationshipRoutes);
 router.use('/tree', treeRoutes);
 router.use('/admin', adminRoutes);
+router.use('/ai', aiRoutes);
 
 export default router;

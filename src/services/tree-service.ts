@@ -14,10 +14,21 @@ const log = createLogger('tree-service');
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
 
-/** Columns needed for the slim layout endpoint */
-const LAYOUT_COLS = 'p.id, p.first_name, p.last_name, p.gender, p.is_deceased';
+/** Columns needed for the slim layout endpoint (drives directory/events tabs too) */
+const LAYOUT_COLS =
+    'p.id, p.first_name, p.last_name, p.gender, p.is_deceased, p.birth_date, p.death_year, p.location';
 
-type LayoutRow = Pick<PersonRow, 'id' | 'first_name' | 'last_name' | 'gender' | 'is_deceased'>;
+type LayoutRow = Pick<
+    PersonRow,
+    | 'id'
+    | 'first_name'
+    | 'last_name'
+    | 'gender'
+    | 'is_deceased'
+    | 'birth_date'
+    | 'death_year'
+    | 'location'
+>;
 
 function buildRelationshipArrays(rowId: string, rels: RelationshipRow[]) {
     const parentIds: string[] = [];
@@ -85,6 +96,9 @@ function personToLayout(row: LayoutRow, rels: RelationshipRow[]): TreePersonLayo
         lastName: row.last_name,
         gender: row.gender,
         isDeceased: row.is_deceased,
+        birthDate: row.birth_date,
+        deathYear: row.death_year,
+        location: row.location,
         parentIds,
         spouseIds,
         exSpouseIds,
