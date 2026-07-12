@@ -1,11 +1,15 @@
 import type { NextFunction, Response } from 'express';
 import * as personService from '../services/person-service.js';
-import type { AuthenticatedRequest } from '../types/index.js';
+import * as relationshipService from '../services/relationship-service.js';
+import type { AuthenticatedRequest, RelationshipType } from '../types/index.js';
 import { assertCanEdit } from '../validators/permission-validator.js';
+import { assertMaxParents, assertMaxSpouses } from '../validators/graph-validator.js';
 import { recomputeLayout } from '../services/layout-service.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('person-controller');
+
+const VALID_RELATION_TYPES = new Set<string>(['PARENT', 'CHILD', 'SPOUSE']);
 
 export async function create(
     req: AuthenticatedRequest,
@@ -51,6 +55,97 @@ export async function create(
         res.status(201).json(person);
     } catch (err) {
         log.error('Create person failed', { error: err instanceof Error ? err.message : String(err) });
+        next(err);
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Create person + relationships in one shot (single layout pass)     */
+/* ------------------------------------------------------------------ */
+
+interface RelationInput {
+    targetPersonId: string;
+    relationshipType: RelationshipType;
+}
+
+export async function createWithRelations(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction,
+): Promise<void> {
+    try {
+        const { person, relations } = req.body as {
+            person?: Record<string, unknown>;
+            relations?: RelationInput[];
+        };
+
+        if (!person?.firstName) {
+            res.status(400).json({ error: 'person.firstName is required' });
+            return;
+        }
+        const relationList: RelationInput[] = Array.isArray(relations) ? relations : [];
+        for (const rel of relationList) {
+            if (!rel?.targetPersonId || !VALID_RELATION_TYPES.has(rel.relationshipType)) {
+                res.status(400).json({
+                    error: 'Each relation needs targetPersonId and a valid relationshipType',
+                });
+                return;
+            }
+        }
+
+        /* Pre-flight validations BEFORE creating the person, so a
+         * predictable failure doesn't leave an orphan node behind.
+         * (Cycles/duplicates are impossible for a brand-new person.) */
+        const parentRows = relationList.filter((r) => r.relationshipType === 'CHILD');
+        if (parentRows.length > 2) {
+            res.status(400).json({ error: 'A person cannot have more than 2 parents' });
+            return;
+        }
+        for (const rel of relationList) {
+            if (rel.relationshipType === 'PARENT') {
+                // New person becomes a parent of target → target gains a parent
+                await assertMaxParents(rel.targetPersonId);
+            } else if (rel.relationshipType === 'SPOUSE') {
+                await assertMaxSpouses(rel.targetPersonId);
+            }
+        }
+
+        log.info('Creating person with relations', {
+            firstName: person.firstName,
+            relationCount: relationList.length,
+            userId: req.user!.userId,
+        });
+
+        const created = await personService.createPerson({
+            ...(person as object),
+            createdBy: req.user!.userId,
+        } as Parameters<typeof personService.createPerson>[0]);
+
+        const relationships = [];
+        for (const rel of relationList) {
+            const result = await relationshipService.addRelationship({
+                sourcePersonId: created.id,
+                targetPersonId: rel.targetPersonId,
+                relationshipType: rel.relationshipType,
+                createdBy: req.user!.userId,
+            });
+            relationships.push(result.forward);
+        }
+
+        await recomputeLayout();
+        log.info('Person created with relations', {
+            personId: created.id,
+            relationCount: relationships.length,
+        });
+        res.status(201).json({ person: created, relationships });
+    } catch (err) {
+        log.error('Create person with relations failed', {
+            error: err instanceof Error ? err.message : String(err),
+        });
+        // Position whatever was created before the failure
+        try {
+            await recomputeLayout();
+        } catch { /* best effort */ }
         next(err);
     }
 }

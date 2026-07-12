@@ -54,6 +54,72 @@ export async function add(
 }
 
 /* ------------------------------------------------------------------ */
+/*  Add several relationships in one shot (single layout pass)         */
+/* ------------------------------------------------------------------ */
+
+export async function addBatch(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction,
+): Promise<void> {
+    try {
+        const { relationships } = req.body as {
+            relationships?: Array<{
+                sourcePersonId: string;
+                targetPersonId: string;
+                relationshipType: string;
+            }>;
+        };
+
+        if (!Array.isArray(relationships) || relationships.length === 0) {
+            res.status(400).json({ error: 'relationships array is required' });
+            return;
+        }
+        for (const rel of relationships) {
+            if (
+                !rel?.sourcePersonId ||
+                !rel?.targetPersonId ||
+                !VALID_TYPES.has(rel.relationshipType)
+            ) {
+                res.status(400).json({
+                    error: 'Each relationship needs sourcePersonId, targetPersonId and a valid relationshipType',
+                });
+                return;
+            }
+        }
+
+        log.info('Adding relationship batch', {
+            count: relationships.length,
+            userId: req.user!.userId,
+        });
+
+        const results = [];
+        try {
+            for (const rel of relationships) {
+                const result = await relationshipService.addRelationship({
+                    sourcePersonId: rel.sourcePersonId,
+                    targetPersonId: rel.targetPersonId,
+                    relationshipType: rel.relationshipType as RelationshipType,
+                    createdBy: req.user!.userId,
+                });
+                results.push(result.forward);
+            }
+        } finally {
+            // One layout pass whether everything or only part succeeded
+            if (results.length > 0) await recomputeLayout();
+        }
+
+        log.info('Relationship batch added', { count: results.length });
+        res.status(201).json({ relationships: results });
+    } catch (err) {
+        log.error('Add relationship batch failed', {
+            error: err instanceof Error ? err.message : String(err),
+        });
+        next(err);
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /*  Remove relationship (admin only — enforced at route level)         */
 /* ------------------------------------------------------------------ */
 

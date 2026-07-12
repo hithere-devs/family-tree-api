@@ -16,6 +16,9 @@ router.get('/:id', personController.getById);
 // POST   /api/persons          — create person (admin only)
 router.post('/', adminOnly, personController.create);
 
+// POST   /api/persons/with-relations — create person + link relatives in one shot (admin only)
+router.post('/with-relations', adminOnly, personController.createWithRelations);
+
 // PUT    /api/persons/:id      — update person (permission-checked in controller)
 router.put('/:id', personController.update);
 

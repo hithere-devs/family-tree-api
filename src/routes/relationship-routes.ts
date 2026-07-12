@@ -10,6 +10,9 @@ router.use(authMiddleware);
 // POST   /api/relationships              — add a relationship
 router.post('/', relationshipController.add);
 
+// POST   /api/relationships/batch        — add several relationships, one layout pass
+router.post('/batch', relationshipController.addBatch);
+
 // PATCH  /api/relationships/status       — update relationship status (e.g. divorce)
 router.patch('/status', relationshipController.updateStatus);
 
