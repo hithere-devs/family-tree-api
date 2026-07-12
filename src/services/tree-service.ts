@@ -173,40 +173,32 @@ export async function getSubtreeLayout(
     }
     log.info('Building subtree layout', { centerId });
 
-    const connectedPeople = await queryAll<LayoutRow>(
-        `WITH RECURSIVE connected AS (
-            SELECT p.id
-            FROM person p
-            WHERE p.id = :centerId AND p.is_deleted = false
-
-            UNION
-
-            SELECT p.id
-            FROM relationship r
-            INNER JOIN connected c ON r.source_person_id = c.id
-            INNER JOIN person p ON p.id = r.target_person_id
-            WHERE p.is_deleted = false
-        )
-        SELECT DISTINCT ${LAYOUT_COLS}
-        FROM person p
-        INNER JOIN connected c ON p.id = c.id
-        WHERE p.is_deleted = false`,
-        { centerId },
+    // Flat load: two simple queries instead of a recursive CTE walk.
+    // Everyone belongs to one family app, so "all non-deleted people"
+    // and "all edges between them" is both simpler and faster.
+    const allPeople = await queryAll<LayoutRow>(
+        `SELECT ${LAYOUT_COLS} FROM person p WHERE p.is_deleted = false`,
     );
 
-    if (connectedPeople.length === 0) return {};
+    if (allPeople.length === 0) return {};
 
-    const idArray = connectedPeople.map((p) => p.id);
     const allRels = await queryAll<RelationshipRow>(
         `SELECT r.* FROM relationship r
-         INNER JOIN person p ON p.id = r.target_person_id AND p.is_deleted = false
-         WHERE r.source_person_id = ANY(ARRAY[${idArray.map((_, i) => `:id${i}`).join(',')}]::uuid[])`,
-        Object.fromEntries(idArray.map((id, i) => [`id${i}`, id])),
+         INNER JOIN person ps ON ps.id = r.source_person_id AND ps.is_deleted = false
+         INNER JOIN person pt ON pt.id = r.target_person_id AND pt.is_deleted = false`,
     );
 
+    // Group edges by source once — avoids an O(people x edges) scan.
+    const relsBySource = new Map<string, RelationshipRow[]>();
+    for (const rel of allRels) {
+        const bucket = relsBySource.get(rel.source_person_id);
+        if (bucket) bucket.push(rel);
+        else relsBySource.set(rel.source_person_id, [rel]);
+    }
+
     const result: Record<string, TreePersonLayout> = {};
-    for (const p of connectedPeople) {
-        result[p.id] = personToLayout(p, allRels);
+    for (const p of allPeople) {
+        result[p.id] = personToLayout(p, relsBySource.get(p.id) ?? []);
     }
 
     log.info('Subtree layout built', { centerId, nodeCount: Object.keys(result).length });

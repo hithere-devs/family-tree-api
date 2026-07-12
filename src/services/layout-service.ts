@@ -18,11 +18,13 @@ const log = createLogger('layout-service');
 /*  Constants — must match frontend PersonNode dimensions              */
 /* ------------------------------------------------------------------ */
 
-const H_GAP = 600;
-const V_GAP = 900;
-const COUPLE_GAP = 240;
-const MIN_VERT_GAP = 100;
+const H_GAP = 320;
+const V_GAP = 600;
+const COUPLE_GAP = 200;
+const MIN_VERT_GAP = 80;
 const NODE_H = 140;
+/** Horizontal gap between disconnected family components */
+const COMPONENT_GAP = 1500;
 
 /* ------------------------------------------------------------------ */
 /*  Internal types                                                     */
@@ -47,42 +49,25 @@ interface NodePosition {
 /*  Data loading                                                       */
 /* ------------------------------------------------------------------ */
 
-async function loadConnectedPeople(centerId: string): Promise<{
+async function loadAllPeople(): Promise<{
     people: Record<string, LayoutPerson>;
     allIds: string[];
 }> {
-    // 1. Find all connected person IDs via recursive CTE
+    // 1. Every non-deleted person — disconnected islands included, so
+    //    nobody is left without layout coordinates.
     const rows = await queryAll<{ id: string; gender: string }>(
-        `WITH RECURSIVE connected AS (
-            SELECT p.id
-            FROM person p
-            WHERE p.id = :centerId AND p.is_deleted = false
-
-            UNION
-
-            SELECT p.id
-            FROM relationship r
-            INNER JOIN connected c ON r.source_person_id = c.id
-            INNER JOIN person p ON p.id = r.target_person_id
-            WHERE p.is_deleted = false
-        )
-        SELECT DISTINCT p.id, p.gender
-        FROM person p
-        INNER JOIN connected c ON p.id = c.id
-        WHERE p.is_deleted = false`,
-        { centerId },
+        `SELECT id, gender FROM person WHERE is_deleted = false`,
     );
 
     if (rows.length === 0) return { people: {}, allIds: [] };
 
     const allIds = rows.map((r) => r.id);
 
-    // 2. Fetch all relationships for these people
+    // 2. All relationships between non-deleted people
     const rels = await queryAll<RelationshipRow>(
         `SELECT r.* FROM relationship r
-         INNER JOIN person p ON p.id = r.target_person_id AND p.is_deleted = false
-         WHERE r.source_person_id = ANY(ARRAY[${allIds.map((_, i) => `:id${i}`).join(',')}]::uuid[])`,
-        Object.fromEntries(allIds.map((id, i) => [`id${i}`, id])),
+         INNER JOIN person ps ON ps.id = r.source_person_id AND ps.is_deleted = false
+         INNER JOIN person pt ON pt.id = r.target_person_id AND pt.is_deleted = false`,
     );
 
     // 3. Build lookup
@@ -121,6 +106,111 @@ async function loadConnectedPeople(centerId: string): Promise<{
     }
 
     return { people, allIds };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Connected components + deterministic packing                       */
+/* ------------------------------------------------------------------ */
+
+function connectedComponents(
+    people: Record<string, LayoutPerson>,
+): string[][] {
+    const unseen = new Set(Object.keys(people));
+    const components: string[][] = [];
+
+    while (unseen.size > 0) {
+        const start = [...unseen].sort()[0];
+        const queue = [start];
+        const component: string[] = [];
+        unseen.delete(start);
+
+        while (queue.length > 0) {
+            const id = queue.shift()!;
+            component.push(id);
+            const person = people[id];
+            const neighbours = [
+                ...person.parentIds,
+                ...person.childrenIds,
+                ...person.spouseIds,
+                ...person.exSpouseIds,
+            ];
+            for (const neighbour of neighbours) {
+                if (!unseen.has(neighbour)) continue;
+                unseen.delete(neighbour);
+                queue.push(neighbour);
+            }
+        }
+
+        components.push(component.sort());
+    }
+
+    return components;
+}
+
+/**
+ * Deterministic component root: a person with no parents (top
+ * generation), ties broken by id. Keeps the layout stable no matter
+ * which user triggered the recompute.
+ */
+function chooseComponentRoot(
+    component: string[],
+    people: Record<string, LayoutPerson>,
+): string {
+    const roots = component
+        .filter((id) => people[id].parentIds.length === 0)
+        .sort();
+    return roots[0] ?? component[0];
+}
+
+function pickPeople(
+    ids: string[],
+    people: Record<string, LayoutPerson>,
+): Record<string, LayoutPerson> {
+    return Object.fromEntries(ids.map((id) => [id, people[id]]));
+}
+
+/**
+ * Lay out every connected component and pack them side by side:
+ * the largest component (the main family) sits first with its root
+ * at the origin, smaller islands follow to the right.
+ */
+function packComponentLayouts(
+    people: Record<string, LayoutPerson>,
+): NodePosition[] {
+    const components = connectedComponents(people);
+    components.sort(
+        (a, b) => b.length - a.length || a[0].localeCompare(b[0]),
+    );
+
+    const packed: NodePosition[] = [];
+    let nextX = 0;
+
+    for (let index = 0; index < components.length; index++) {
+        const ids = components[index];
+        const rootId = chooseComponentRoot(ids, people);
+        const positions = computeLayout(pickPeople(ids, people), rootId);
+        if (positions.length === 0) continue;
+
+        let minX = Infinity;
+        let maxX = -Infinity;
+        for (const position of positions) {
+            if (position.x < minX) minX = position.x;
+            if (position.x > maxX) maxX = position.x;
+        }
+
+        const shiftX = index === 0 ? 0 : nextX - minX;
+        nextX = maxX + shiftX + COMPONENT_GAP;
+
+        for (const position of positions) {
+            packed.push({
+                personId: position.personId,
+                x: position.x + shiftX,
+                y: position.y,
+            });
+        }
+    }
+
+    return packed;
 }
 
 /* ------------------------------------------------------------------ */
@@ -705,30 +795,22 @@ function computeLayout(
 /*  Public API                                                         */
 /* ------------------------------------------------------------------ */
 
-/** Debounce state for recompute requests */
-let _recomputeTimer: ReturnType<typeof setTimeout> | null = null;
-let _pendingCenterId: string | null = null;
-
-/**
- * Recompute layout positions for the entire connected tree centered
- * on `centerId` and store results in the `layout_x`, `layout_y`
- * columns of the `person` table.
- */
-export async function recomputeLayout(centerId: string): Promise<{
+interface RecomputeResult {
     nodeCount: number;
     durationMs: number;
-}> {
-    const start = Date.now();
-    log.info('Recomputing layout', { centerId });
+}
 
-    const { people } = await loadConnectedPeople(centerId);
+async function doRecompute(): Promise<RecomputeResult> {
+    const start = Date.now();
+
+    const { people } = await loadAllPeople();
 
     if (Object.keys(people).length === 0) {
-        log.warn('No connected people found for layout', { centerId });
+        log.warn('No people found for layout');
         return { nodeCount: 0, durationMs: Date.now() - start };
     }
 
-    const positions = computeLayout(people, centerId);
+    const positions = packComponentLayouts(people);
 
     // Batch-update positions in DB
     // Build a single UPDATE using unnest for efficiency
@@ -762,35 +844,42 @@ export async function recomputeLayout(centerId: string): Promise<{
 
     const durationMs = Date.now() - start;
     log.info('Layout recomputed', {
-        centerId,
         nodeCount: positions.length,
         durationMs,
     });
     return { nodeCount: positions.length, durationMs };
 }
 
+/* Coalescing latch — concurrent writes share one recompute; if data
+ * changed while a pass was running, one more pass runs before the
+ * shared promise resolves. */
+let _inFlight: Promise<RecomputeResult> | null = null;
+let _rerunRequested = false;
+
 /**
- * Schedule a debounced layout recompute. Multiple calls within the
- * debounce window (2s) will be collapsed into a single recompute.
+ * Recompute layout for ALL non-deleted people (every connected
+ * component, islands included) and store results in the `layout_x`,
+ * `layout_y` columns of the `person` table. The layout is
+ * deterministic regardless of which person/user triggered it.
  */
-export function scheduleRecompute(centerId: string): void {
-    _pendingCenterId = centerId;
-    if (_recomputeTimer) clearTimeout(_recomputeTimer);
-    _recomputeTimer = setTimeout(async () => {
-        _recomputeTimer = null;
-        const cid = _pendingCenterId;
-        _pendingCenterId = null;
-        if (cid) {
-            try {
-                await recomputeLayout(cid);
-            } catch (err) {
-                log.error('Scheduled layout recompute failed', {
-                    centerId: cid,
-                    error: err instanceof Error ? err.message : String(err),
-                });
-            }
-        }
-    }, 2000);
+export async function recomputeLayout(_centerId?: string): Promise<RecomputeResult> {
+    if (_inFlight) {
+        _rerunRequested = true;
+        return _inFlight;
+    }
+
+    _inFlight = (async () => {
+        let result: RecomputeResult;
+        do {
+            _rerunRequested = false;
+            result = await doRecompute();
+        } while (_rerunRequested);
+        return result;
+    })().finally(() => {
+        _inFlight = null;
+    });
+
+    return _inFlight;
 }
 
 /* ------------------------------------------------------------------ */
@@ -884,10 +973,13 @@ export async function getTreeViewport(params: {
 /* ------------------------------------------------------------------ */
 
 export async function getAllEdges(): Promise<ViewportEdge[]> {
+    // The renderer only draws PARENT and SPOUSE edges (CHILD rows are
+    // the mirror of PARENT rows) — skip the redundant half of the payload.
     const edges = await queryAll<RelationshipRow>(
         `SELECT r.* FROM relationship r
          JOIN person p1 ON p1.id = r.source_person_id AND p1.is_deleted = false
-         JOIN person p2 ON p2.id = r.target_person_id AND p2.is_deleted = false`,
+         JOIN person p2 ON p2.id = r.target_person_id AND p2.is_deleted = false
+         WHERE r.relationship_type IN ('PARENT', 'SPOUSE')`,
     );
     return edges.map((e) => ({
         sourceId: e.source_person_id,

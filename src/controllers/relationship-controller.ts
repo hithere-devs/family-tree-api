@@ -1,7 +1,7 @@
 import type { Response, NextFunction } from 'express';
 import type { AuthenticatedRequest, RelationshipType } from '../types/index.js';
 import * as relationshipService from '../services/relationship-service.js';
-import { scheduleRecompute } from '../services/layout-service.js';
+import { recomputeLayout } from '../services/layout-service.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('relationship-controller');
@@ -43,7 +43,9 @@ export async function add(
         });
 
         log.info('Relationship added', { forwardId: result.forward.id, inverseId: result.inverse.id });
-        scheduleRecompute(sourcePersonId);
+        // Await the recompute so the new node/edge is positioned before
+        // the client refreshes the canvas.
+        await recomputeLayout();
         res.status(201).json(result);
     } catch (err) {
         log.error('Add relationship failed', { error: err instanceof Error ? err.message : String(err) });
@@ -65,8 +67,7 @@ export async function remove(
         log.info('Removing relationship', { relationshipId: id });
         await relationshipService.removeRelationship(id);
         log.info('Relationship removed', { relationshipId: id });
-        // Schedule layout recompute — we don't know the center, use the user's personId
-        if (req.user?.personId) scheduleRecompute(req.user.personId);
+        await recomputeLayout();
         res.json({ message: 'Relationship removed' });
     } catch (err) {
         log.error('Remove relationship failed', { relationshipId: req.params.id, error: err instanceof Error ? err.message : String(err) });
@@ -130,6 +131,8 @@ export async function updateStatus(
         );
 
         log.info('Relationship status updated', { sourcePersonId, targetPersonId, status });
+        // Divorce/confirm changes spouse clustering — recompute positions.
+        await recomputeLayout();
         res.json({ message: 'Relationship status updated' });
     } catch (err) {
         log.error('Update relationship status failed', { error: err instanceof Error ? err.message : String(err) });

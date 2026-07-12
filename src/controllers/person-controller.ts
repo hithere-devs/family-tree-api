@@ -2,7 +2,7 @@ import type { NextFunction, Response } from 'express';
 import * as personService from '../services/person-service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { assertCanEdit } from '../validators/permission-validator.js';
-import { scheduleRecompute } from '../services/layout-service.js';
+import { recomputeLayout } from '../services/layout-service.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('person-controller');
@@ -47,7 +47,7 @@ export async function create(
         });
 
         log.info('Person created', { personId: person.id, firstName });
-        if (req.user?.personId) scheduleRecompute(req.user.personId);
+        await recomputeLayout();
         res.status(201).json(person);
     } catch (err) {
         log.error('Create person failed', { error: err instanceof Error ? err.message : String(err) });
@@ -136,6 +136,7 @@ export async function remove(
         log.info('Deleting person', { personId: id });
         await personService.softDeletePerson(id);
         log.info('Person deleted', { personId: id });
+        await recomputeLayout();
         res.json({ message: 'Person deleted' });
     } catch (err) {
         log.error('Delete person failed', { personId: req.params.id, error: err instanceof Error ? err.message : String(err) });

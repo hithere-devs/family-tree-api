@@ -8,6 +8,7 @@ dotenv.config({ path: path.resolve(__dirname, '..', '.env') });
 
 import express from 'express';
 import cors from 'cors';
+import compression from 'compression';
 import morgan from 'morgan';
 import { getDb } from './db/connection.js';
 import apiRoutes from './routes/index.js';
@@ -26,6 +27,7 @@ app.set('etag', false);
 /* ------------------------------------------------------------------ */
 
 app.use(cors({ origin: true, credentials: true }));
+app.use(compression());
 app.use(express.json());
 
 app.use('/api', (_req, res, next) => {
