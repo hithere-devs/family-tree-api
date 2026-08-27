@@ -15,53 +15,47 @@ jobs:
       NORTHSTAR_SETUP_URL: ${{ secrets.NORTHSTAR_SETUP_URL }}
       NORTHSTAR_SETUP_TOKEN: ${{ secrets.NORTHSTAR_SETUP_TOKEN }}
     steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Register the existing database without printing credentials
         shell: bash
         run: |
-          python - <<'PY'
-          import json
-          import os
-          import urllib.parse
-          import urllib.request
+          node <<'JS'
+          const values = {};
+          for (const raw of process.env.PROD_ENV.split(/\r?\n/)) {
+            const line = raw.trim();
+            if (!line || line.startsWith("#") || !line.includes("=")) continue;
+            const split = line.indexOf("=");
+            let value = line.slice(split + 1).trim();
+            if (value.length >= 2 && value[0] === value[value.length - 1] && ["\"", "'"].includes(value[0])) {
+              value = value.slice(1, -1);
+            }
+            values[line.slice(0, split).trim()] = value;
+          }
 
-          values = {}
-          for raw in os.environ["PROD_ENV"].splitlines():
-              line = raw.strip()
-              if not line or line.startswith("#") or "=" not in line:
-                  continue
-              key, value = line.split("=", 1)
-              value = value.strip()
-              if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-                  value = value[1:-1]
-              values[key.strip()] = value
+          const password = values.DB_PASSWORD || "";
+          console.log("::add-mask::" + password);
+          const required = ["DB_HOST", "DB_NAME", "DB_USER", "DB_PASSWORD"];
+          const missing = required.filter((key) => !values[key]);
+          if (missing.length) throw new Error("PROD_ENV is missing: " + missing.join(", "));
 
-          password = values.get("DB_PASSWORD", "")
-          print("::add-mask::" + password)
-          required = ["DB_HOST", "DB_NAME", "DB_USER", "DB_PASSWORD"]
-          missing = [key for key in required if not values.get(key)]
-          if missing:
-              raise RuntimeError("PROD_ENV is missing: " + ", ".join(missing))
-
-          host = values["DB_HOST"]
-          port = values.get("DB_PORT", "5432")
-          database_url = "postgresql://{}:{}@{}:{}/{}?sslmode=require".format(
-              urllib.parse.quote(values["DB_USER"], safe=""),
-              urllib.parse.quote(password, safe=""),
-              host,
-              port,
-              urllib.parse.quote(values["DB_NAME"], safe=""),
-          )
-          body = json.dumps({"database_url": database_url}).encode()
-          request = urllib.request.Request(
-              os.environ["NORTHSTAR_SETUP_URL"],
-              data=body,
-              method="POST",
-              headers={
-                  "Authorization": "Bearer " + os.environ["NORTHSTAR_SETUP_TOKEN"],
-                  "Content-Type": "application/json",
-              },
-          )
-          with urllib.request.urlopen(request, timeout=60) as response:
-              result = json.loads(response.read())
-          print("Registered Northstar target " + result["id"])
-          PY
+          const database = encodeURIComponent(values.DB_NAME);
+          const username = encodeURIComponent(values.DB_USER);
+          const encodedPassword = encodeURIComponent(password);
+          const port = values.DB_PORT || "5432";
+          const databaseUrl = `postgresql://${username}:${encodedPassword}@${values.DB_HOST}:${port}/${database}?sslmode=require`;
+          const response = await fetch(process.env.NORTHSTAR_SETUP_URL, {
+            method: "POST",
+            headers: {
+              authorization: "Bearer " + process.env.NORTHSTAR_SETUP_TOKEN,
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({ database_url: databaseUrl }),
+          });
+          if (!response.ok) throw new Error(`Northstar setup returned HTTP ${response.status}: ${await response.text()}`);
+          const result = await response.json();
+          console.log("Registered Northstar target " + result.id);
+          JS
