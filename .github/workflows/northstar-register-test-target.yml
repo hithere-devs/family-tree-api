@@ -1,0 +1,67 @@
+name: Register Northstar test target
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  register:
+    runs-on: family-tree-api
+    timeout-minutes: 5
+    env:
+      PROD_ENV: ${{ secrets.PROD_ENV }}
+      NORTHSTAR_SETUP_URL: ${{ secrets.NORTHSTAR_SETUP_URL }}
+      NORTHSTAR_SETUP_TOKEN: ${{ secrets.NORTHSTAR_SETUP_TOKEN }}
+    steps:
+      - name: Register the existing database without printing credentials
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.parse
+          import urllib.request
+
+          values = {}
+          for raw in os.environ["PROD_ENV"].splitlines():
+              line = raw.strip()
+              if not line or line.startswith("#") or "=" not in line:
+                  continue
+              key, value = line.split("=", 1)
+              value = value.strip()
+              if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                  value = value[1:-1]
+              values[key.strip()] = value
+
+          password = values.get("DB_PASSWORD", "")
+          print("::add-mask::" + password)
+          required = ["DB_HOST", "DB_NAME", "DB_USER", "DB_PASSWORD"]
+          missing = [key for key in required if not values.get(key)]
+          if missing:
+              raise RuntimeError("PROD_ENV is missing: " + ", ".join(missing))
+
+          host = values["DB_HOST"]
+          port = values.get("DB_PORT", "5432")
+          database_url = "postgresql://{}:{}@{}:{}/{}?sslmode=require".format(
+              urllib.parse.quote(values["DB_USER"], safe=""),
+              urllib.parse.quote(password, safe=""),
+              host,
+              port,
+              urllib.parse.quote(values["DB_NAME"], safe=""),
+          )
+          body = json.dumps({"database_url": database_url}).encode()
+          request = urllib.request.Request(
+              os.environ["NORTHSTAR_SETUP_URL"],
+              data=body,
+              method="POST",
+              headers={
+                  "Authorization": "Bearer " + os.environ["NORTHSTAR_SETUP_TOKEN"],
+                  "Content-Type": "application/json",
+              },
+          )
+          with urllib.request.urlopen(request, timeout=60) as response:
+              result = json.loads(response.read())
+          print("Registered Northstar target " + result["id"])
+          PY

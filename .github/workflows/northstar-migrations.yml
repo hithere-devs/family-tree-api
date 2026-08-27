@@ -1,0 +1,51 @@
+name: Northstar migrations
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, closed]
+    paths:
+      - 'src/db/migrations/**'
+
+permissions:
+  contents: read
+
+jobs:
+  notify-northstar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Send the signed pull request event
+        env:
+          NORTHSTAR_WEBHOOK_URL: ${{ secrets.NORTHSTAR_WEBHOOK_URL }}
+          NORTHSTAR_WEBHOOK_SECRET: ${{ secrets.NORTHSTAR_WEBHOOK_SECRET }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib
+          import hmac
+          import os
+          import urllib.request
+
+          with open(os.environ["GITHUB_EVENT_PATH"], "rb") as event_file:
+              payload = event_file.read()
+          secret = os.environ["NORTHSTAR_WEBHOOK_SECRET"].encode()
+          if not secret or not os.environ["NORTHSTAR_WEBHOOK_URL"]:
+              raise RuntimeError("Northstar webhook secrets are not configured")
+          signature = "sha256=" + hmac.new(secret, payload, hashlib.sha256).hexdigest()
+          delivery = "github-actions-{}-{}".format(
+              os.environ["GITHUB_RUN_ID"], os.environ["GITHUB_RUN_ATTEMPT"]
+          )
+          request = urllib.request.Request(
+              os.environ["NORTHSTAR_WEBHOOK_URL"],
+              data=payload,
+              method="POST",
+              headers={
+                  "Content-Type": "application/json",
+                  "X-GitHub-Event": "pull_request",
+                  "X-GitHub-Delivery": delivery,
+                  "X-Hub-Signature-256": signature,
+              },
+          )
+          with urllib.request.urlopen(request, timeout=180) as response:
+              print(response.read().decode())
+          PY
